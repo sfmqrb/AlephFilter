@@ -55,8 +55,30 @@ public class Payload_Experiment extends ExperimentsBase {
                 32,
                 128,
         };
+        System.gc();
+        payload_size = 0;
+
         for (int ps : payload_sizes) {
             for (PayloadStrategy strategy : new PayloadStrategy[]{PayloadStrategy.MIRRORING, PayloadStrategy.NEIGHBORING}) {
+
+                System.gc();
+                Constants.setPayloadStrategy(Constants.getPayloadStrategy());
+                baseline original_qf_res_no_payload = new baseline();
+                {
+                    int qf_size = (num_entries_power + num_cycles) / 2 + 5;
+                    QuotientFilter orig = new QuotientFilter(qf_size, bits_per_entry, payload_size);
+                    orig.set_expand_autonomously(false);
+                    long starting_index = 0;
+                    for (int i = 1; i < num_cycles; i++) {
+                        long end_key = (int) (Math.pow(2, qf_size) * i / num_cycles);
+                        scalability_experiment_no_payload(orig, starting_index, end_key, original_qf_res_no_payload);
+                        starting_index = end_key;
+                        System.out.println("static quotient filter with no payload " + i);
+                    }
+                }
+                System.gc();
+                System.out.println("finished quotient with no payload");
+
                 System.gc();
                 payload_size = ps;
                 Constants.setPayloadStrategy(strategy);
@@ -130,8 +152,9 @@ public class Payload_Experiment extends ExperimentsBase {
                 System.out.println("finished geometric chaining");
 //
                 int commas_before = 1;
-                int commas_after = 5;
+                int commas_after = 6;
                 System.out.println("Insertion Time");
+                original_qf_res_no_payload.print("num_entries", "insertion_time", commas_before++, commas_after--);
                 original_qf_res.print("num_entries", "insertion_time", commas_before++, commas_after--);
                 chained_IF_res.print("num_entries", "insertion_time", commas_before++, commas_after--);
                 bit_sacrifice_res.print("num_entries", "insertion_time", commas_before++, commas_after--);
@@ -140,8 +163,9 @@ public class Payload_Experiment extends ExperimentsBase {
                 System.out.println();
 
                 commas_before = 1;
-                commas_after = 5;
+                commas_after = 6;
                 System.out.println("Query Time");
+                original_qf_res_no_payload.print("num_entries", "query_time", commas_before++, commas_after--);
                 original_qf_res.print("num_entries", "query_time", commas_before++, commas_after--);
                 chained_IF_res.print("num_entries", "query_time", commas_before++, commas_after--);
                 bit_sacrifice_res.print("num_entries", "query_time", commas_before++, commas_after--);
@@ -172,6 +196,7 @@ public class Payload_Experiment extends ExperimentsBase {
 
                     commas_before = 1;
                     commas_after = 5;
+                    original_qf_res_no_payload.print_to_file("num_entries", "insertion_time", commas_before++, commas_after--, insertion_writer);
                     original_qf_res.print_to_file("num_entries", "insertion_time", commas_before++, commas_after--, insertion_writer);
                     chained_IF_res.print_to_file("num_entries", "insertion_time", commas_before++, commas_after--, insertion_writer);
                     bit_sacrifice_res.print_to_file("num_entries", "insertion_time", commas_before++, commas_after--, insertion_writer);
@@ -184,6 +209,7 @@ public class Payload_Experiment extends ExperimentsBase {
 
                     commas_before = 1;
                     commas_after = 5;
+                    original_qf_res_no_payload.print_to_file("num_entries", "query_time", commas_before++, commas_after--, reads_writer);
                     original_qf_res.print_to_file("num_entries", "query_time", commas_before++, commas_after--, reads_writer);
                     chained_IF_res.print_to_file("num_entries", "query_time", commas_before++, commas_after--, reads_writer);
                     bit_sacrifice_res.print_to_file("num_entries", "query_time", commas_before++, commas_after--, reads_writer);
@@ -231,6 +257,40 @@ public class Payload_Experiment extends ExperimentsBase {
         long start_key;
         for (start_key = read_this; start_key <= end_key; start_key++) {
             long[][] found_payloads = qf.search_for_payloads(start_key);
+        }
+        long num_queries = start_key - read_this;
+        long end_queries = System.nanoTime();
+        double avg_insertions = (end_insertions - start_insertions) / (double) (insertion_index - initial_num_entries);
+        double avg_queries = (end_queries - start_queries) / (double) num_queries;
+        double num_entries = qf.get_num_occupied_slots(true);
+
+        results.metrics.get("num_entries").add(num_entries);
+        results.metrics.get("insertion_time").add(avg_insertions);
+        results.metrics.get("query_time").add(avg_queries);
+    }
+    static public void scalability_experiment_no_payload(Filter qf, long initial_key, long end_key, baseline results) {
+        // Generate random payloads before starting the time measurement
+        long initial_num_entries = initial_key;
+        long insertion_index = initial_key;
+        long start_insertions = System.nanoTime();
+
+        boolean successful_insert = false;
+        do {
+            successful_insert = qf.insert(insertion_index, false);
+            insertion_index++;
+        } while (insertion_index < end_key && successful_insert);
+
+        if (!successful_insert) {
+            System.out.println("an insertion failed");
+            System.exit(1);
+        }
+
+        long end_insertions = System.nanoTime();
+        long start_queries = System.nanoTime();
+        long read_this = initial_num_entries;
+        long start_key;
+        for (start_key = read_this; start_key <= end_key; start_key++) {
+            qf.search(start_key);
         }
         long num_queries = start_key - read_this;
         long end_queries = System.nanoTime();

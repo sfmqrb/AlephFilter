@@ -609,6 +609,11 @@ public class QuotientFilter extends Filter implements Cloneable {
         return result;
     }
 
+    long swap_fingerprints(long index, long new_fingerprint) {
+        long existing = get_fingerprint(index);
+        set_fingerprint(index, new_fingerprint);
+        return existing;
+    }
     // finds the first empty slot after the given slot index
     long find_first_empty_slot(long index) {
         while (!is_slot_empty(index)) {
@@ -695,7 +700,59 @@ public class QuotientFilter extends Filter implements Cloneable {
         num_physical_entries++;
         return true;
     }
+    boolean insert_new_run(long canonical_slot, long long_fp) {
+        long first_empty_slot = find_first_empty_slot(canonical_slot); // finds the first empty slot to the right of the canonical slot that is empty
+        long preexisting_run_start_index = find_run_start(canonical_slot); // scans the cluster leftwards and then to the right until reaching our run's would be location
+        long start_of_this_new_run = find_new_run_location(preexisting_run_start_index); // If there is already a run at the would-be location, find its end and insert the new run after it
+        boolean slot_initially_empty = is_slot_empty(start_of_this_new_run);
 
+        // modify some metadata flags to mark the new run
+        set_occupied(canonical_slot, true);
+        if (first_empty_slot != canonical_slot) {
+            set_shifted(start_of_this_new_run, true);
+        }
+        set_continuation(start_of_this_new_run, false);
+
+        // if the slot was initially empty, we can just terminate, as there is nothing to push to the right
+        if (slot_initially_empty) {
+            set_fingerprint(start_of_this_new_run, long_fp);
+            if (start_of_this_new_run == last_empty_slot) {
+                last_empty_slot = find_backward_empty_slot(last_cluster_start);
+            }
+            num_physical_entries++;
+            return true;
+        }
+
+        // push all entries one slot to the right
+        // if we inserted this run in the middle of a cluster
+        long current_index = start_of_this_new_run;
+        boolean is_this_slot_empty;
+        boolean temp_continuation = false;
+        do {
+            if (current_index >= get_logical_num_slots_plus_extensions()) {
+                return false;
+            }
+
+            is_this_slot_empty = is_slot_empty(current_index);
+            long_fp = swap_fingerprints(current_index, long_fp);
+
+            if (current_index > start_of_this_new_run) {
+                set_shifted(current_index, true);
+            }
+
+            if (current_index > start_of_this_new_run) {
+                boolean current_continuation = is_continuation(current_index);
+                set_continuation(current_index, temp_continuation);
+                temp_continuation = current_continuation;
+            }
+            current_index++;
+            if (current_index == last_empty_slot) {  // TODO get this out of the while loop
+                last_empty_slot = find_backward_empty_slot(last_cluster_start);
+            }
+        } while (!is_this_slot_empty);
+        num_physical_entries++;
+        return true;
+    }
     boolean insert(long long_fp, long index, boolean insert_only_if_no_match, long[] payload) {
         if (index > last_empty_slot) {
             return false;
@@ -716,6 +773,58 @@ public class QuotientFilter extends Filter implements Cloneable {
         return insert_fingerprint_and_push_all_else(long_fp, run_start_index, payload);
     }
 
+    boolean insert(long long_fp, long index, boolean insert_only_if_no_match) {
+        if (index > last_empty_slot) {
+            return false;
+        }
+        boolean does_run_exist = is_occupied(index);
+        if (!does_run_exist) {
+            boolean val = insert_new_run(index, long_fp);
+            return val;
+        }
+
+        long run_start_index = find_run_start(index);
+        if (does_run_exist && insert_only_if_no_match) {
+            long found_index = find_first_fingerprint_in_run(run_start_index, long_fp);
+            if (found_index > -1) {
+                return false;
+            }
+        }
+        return insert_fingerprint_and_push_all_else(long_fp, run_start_index);
+    }
+
+    boolean insert_fingerprint_and_push_all_else(long long_fp, long run_start_index) {
+        long current_index = run_start_index;
+        boolean is_this_slot_empty;
+        boolean finished_first_run = false;
+        boolean temp_continuation = false;
+
+        do {
+            if (current_index >= get_logical_num_slots_plus_extensions()) {
+                return false;
+            }
+            is_this_slot_empty = is_slot_empty(current_index);
+            if (current_index > run_start_index) {
+                set_shifted(current_index, true);
+            }
+            if (current_index > run_start_index && !finished_first_run && !is_continuation(current_index)) {
+                finished_first_run = true;
+                set_continuation(current_index, true);
+                long_fp = swap_fingerprints(current_index, long_fp);
+            } else if (finished_first_run) {
+                boolean current_continuation = is_continuation(current_index);
+                set_continuation(current_index, temp_continuation);
+                temp_continuation = current_continuation;
+                long_fp = swap_fingerprints(current_index, long_fp);
+            }
+            if (current_index == last_empty_slot) {
+                last_empty_slot = find_backward_empty_slot(last_cluster_start);
+            }
+            current_index++;
+        } while (!is_this_slot_empty);
+        num_physical_entries++;
+        return true;
+    }
     // insert an fingerprint as the first fingerprint of the new run and push all other entries in the cluster to the right.
     boolean insert_fingerprint_and_push_all_else(long long_fp, long run_start_index, long[] payload) {
         long current_index = run_start_index;
@@ -959,7 +1068,19 @@ public class QuotientFilter extends Filter implements Cloneable {
 
     @Override
     protected boolean _insert(long large_hash, boolean insert_only_if_no_match) {
-        return false;
+        if (is_full) {
+            return false;
+        }
+        long slot_index = get_slot_index(large_hash);
+        long fingerprint = gen_fingerprint(large_hash);
+        boolean success = insert(fingerprint, slot_index, false);
+        if (expand_autonomously && num_physical_entries >= max_entries_before_full) {
+            boolean expanded = expand();
+            if (expanded) {
+                num_expansions++;
+            }
+        }
+        return success;
     }
 
     protected boolean _search(long large_hash) {

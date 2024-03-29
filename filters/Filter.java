@@ -104,6 +104,14 @@ public abstract class Filter {
 		return success;
 	}
 
+	public boolean insert(long input, boolean insert_only_if_no_match) {
+		long hash = get_hash(input);
+		boolean success = _insert(hash, insert_only_if_no_match);
+		if (success) {
+			num_logical_entries++;
+		}
+		return success;
+	}
 	public boolean insert(String input, boolean insert_only_if_no_match, long[] payload) {
 		ByteBuffer input_buffer = ByteBuffer.wrap(input.getBytes(StandardCharsets.UTF_8));
 		boolean success =  _insert_payload(HashFunctions.xxhash(input_buffer), insert_only_if_no_match, payload);
